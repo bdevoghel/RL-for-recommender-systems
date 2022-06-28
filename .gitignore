@@ -1,1 +1,6 @@
 ./data/*
+*.egg-info
+__pycache__
+
+VirtualTaobao/virtualTB/ReinforcementLearning
+VirtualTaobao/virtualTB/SupervisedLearning
