@@ -1,5 +1,7 @@
 import gym
 import virtualTB
+import numpy as np
+from tqdm import tqdm
 
 from utils import Agent, Memory
 
@@ -7,13 +9,13 @@ env = gym.make('VirtualTB-v0')
 agent = Agent(env.action_space)
 memory = Memory()
 
-nb_episodes = 100
+nb_episodes = 1000
 rewards = []
 steps = []
 
 verbose = False
 
-for i_episode in range(nb_episodes):
+for i_episode in tqdm(range(nb_episodes), "Episodes", ncols=64):
     state = env.reset()
 
     episode_reward = 0
@@ -47,5 +49,6 @@ for i_episode in range(nb_episodes):
     rewards.append(episode_reward)
     steps.append(episode_steps)
 
-print(rewards)
-print(steps)
+rolling_n = 10
+print(f"Rewards mean : {np.mean(rewards)}\n        rolling (last {nb_episodes//rolling_n}) average : {[np.mean(rewards[i:i+nb_episodes//rolling_n]) for i in range(0, nb_episodes, nb_episodes//rolling_n)]}")
+print(f"Steps   mean : {np.mean(steps)}\n        rolling (last {nb_episodes//rolling_n}) average : {[np.mean(steps[i:i+nb_episodes//rolling_n]) for i in range(0, nb_episodes, nb_episodes//rolling_n)]}")
