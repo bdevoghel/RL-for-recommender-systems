@@ -3,52 +3,82 @@ import virtualTB
 import numpy as np
 from tqdm import tqdm
 
-from utils import Agent, Memory
+from utils import DDPGAgent
 
-env = gym.make('VirtualTB-v0')
-agent = Agent(env.action_space)
-memory = Memory()
-
-nb_episodes = 1000
-rewards = []
-steps = []
-
+nb_episodes = 200
 verbose = False
 
+env = gym.make("VirtualTB-v0")
+agent = DDPGAgent(
+    observations_space=env.observation_space,
+    action_space=env.action_space,
+    ounoise_decay_period=10*nb_episodes,
+    memory_sample_size=128,
+    gamma=0.95,
+    tau=0.001,
+    hidden_size=128,
+)
+
+total_rewards = []  # clicks on products
+total_steps = []  # pages viewed
+total_ounoise_sigma = []
 for i_episode in tqdm(range(nb_episodes), "Episodes", ncols=64):
     state = env.reset()
 
     episode_reward = 0
     episode_steps = 0
     while True:
-        render = env.render(mode='return', short=True)
+        render = env.render(mode="return", short=True)
         if verbose:
             print(render)
 
         action = agent.select_action(state)
-        next_state, reward, done, info = env.step(action)
-        done = bool(done)
+
+        next_state, reward, has_left, info = env.step(action)
+        has_left = bool(has_left)
 
         episode_reward += reward
         episode_steps += 1
 
-        memory.push(state, action, rewards, next_state, done)
-        agent.learn(memory)
+        agent.memory.push(state, action, reward, next_state, int(not has_left))
+        agent.learn()
 
         if verbose:
-            print(f"{' '*32} r:{reward} d:{done} {info}\n" +
-                  f"{' '*32} e:{env}"
-            )
-        
-        if done:
+            print(f"{' '*32} r:{reward} d:{has_left} {info}\n" + f"{' '*32} e:{env}")
+
+        if has_left:
             break
     if verbose:
         env.render(short=True)
         print("\n\n")
 
-    rewards.append(episode_reward)
-    steps.append(episode_steps)
+    total_rewards.append(episode_reward)
+    total_steps.append(episode_steps)
+    total_ounoise_sigma.append(agent.ounoise.sigma)
 
-rolling_n = 10
-print(f"Rewards mean : {np.mean(rewards)}\n        rolling (last {nb_episodes//rolling_n}) average : {[np.mean(rewards[i:i+nb_episodes//rolling_n]) for i in range(0, nb_episodes, nb_episodes//rolling_n)]}")
-print(f"Steps   mean : {np.mean(steps)}\n        rolling (last {nb_episodes//rolling_n}) average : {[np.mean(steps[i:i+nb_episodes//rolling_n]) for i in range(0, nb_episodes, nb_episodes//rolling_n)]}")
+    agent.ounoise.reset(t=i_episode)
+
+print(f"\n{agent.updates} learning steps performed on {nb_episodes} episodes.")
+import matplotlib.pyplot as plt
+
+fig, ax1 = plt.subplots()
+ax2 = ax1.twinx()
+
+total_rewards_rolling_window_size = .05
+rolling_window_width = int(nb_episodes*total_rewards_rolling_window_size)
+total_rewards_average = [np.mean(total_rewards[i:i+rolling_window_width]) for i in range(0, nb_episodes, rolling_window_width)]
+
+ax1.plot(np.arange(-rolling_window_width, nb_episodes, rolling_window_width) + rolling_window_width, [0] + total_rewards_average, "C0", label=f"rewards (rolling average)")
+ax1.plot(total_rewards, "C0", alpha=0.7, label="rewards")
+ax1.plot(total_steps, "C1", alpha=0.5, label="steps")
+ax2.plot(total_ounoise_sigma, "C2", label="sigma")
+
+ax1.set_xlabel("Episodes")
+ax1.set_ylabel("Reward & Num steps")
+ax2.set_ylabel("OUNoise sigma", color="C2")
+
+plt.title(f"{agent}")
+ax1.legend(loc="center left")
+ax2.legend(loc="center right")
+
+plt.savefig(f"training_results/training_{agent}_{nb_episodes}eps_{agent.updates}upd.png")

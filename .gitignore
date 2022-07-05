@@ -2,5 +2,7 @@
 *.egg-info
 __pycache__
 
+training_results
+
 VirtualTaobao/virtualTB/ReinforcementLearning
 VirtualTaobao/virtualTB/SupervisedLearning
