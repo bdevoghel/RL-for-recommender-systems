@@ -8,7 +8,7 @@ from torch.autograd import Variable
 
 def soft_update(target_network, source_network, tau):
     for target, source in zip(target_network.parameters(), source_network.parameters()):
-        target.data.copy_(target.data * (1.0 - tau) + source.data * tau)
+        target.data.copy_(target.data * (1.0 - tau) + source.data * tau)  # if tau is small : slowly changing target network
 
 
 def hard_update(target_network, source_network):
@@ -108,7 +108,7 @@ class Critic(nn.Module):
 
 
 class DDPG(object):
-    def __init__(self, gamma, tau, hidden_size, num_inputs, action_space):
+    def __init__(self, alpha, beta, gamma, tau, hidden_size, num_inputs, action_space):
 
         self.num_inputs = num_inputs
         self.action_space = action_space
@@ -116,34 +116,45 @@ class DDPG(object):
         self.actor = Actor(hidden_size, self.num_inputs, self.action_space)
         self.actor_target = Actor(hidden_size, self.num_inputs, self.action_space)
         # self.actor_perturbed = Actor(hidden_size, self.num_inputs, self.action_space)  # TODO behaviour to be properly defined
-        self.actor_optim = Adam(self.actor.parameters(), lr=1e-4)
+        self.actor_optim = Adam(self.actor.parameters(), lr=alpha)
 
         self.critic = Critic(hidden_size, self.num_inputs, self.action_space)
         self.critic_target = Critic(hidden_size, self.num_inputs, self.action_space)
-        self.critic_optim = Adam(self.critic.parameters(), lr=1e-3)
+        self.critic_optim = Adam(self.critic.parameters(), lr=beta)
 
         self.gamma = gamma  # discount factor for future rewards
         self.tau = tau  # for soft update of target networks
 
-        # make target Actor and target Critic share same weight as base Actor and Critic
+        # init target Actor and target Critic as sharing same weight as base Actor and Critic
         hard_update(self.actor_target, self.actor)
         hard_update(self.critic_target, self.critic)
 
     def select_action(self, state, action_noise=None, param_noise=None):
-        self.actor.eval()
+        self.actor.eval()  # switch to evaluation
+
         if param_noise is None:
             mu = self.actor(Variable(state))
         else:
             assert False, "Behaviour of actor_perturbed to be properly defined"
             mu = self.actor_perturbed(Variable(state))
-
-        self.actor.train()
         mu = mu.data
+
+        self.actor.train()  # switch back to training (end of evaluation)
 
         if action_noise is not None:
             mu += torch.Tensor(action_noise.noise())
 
         return mu.clamp(-1, 1)
+
+    def get_q(self, state, action):
+        self.critic.eval()  # switch to evaluation
+
+        q = self.critic(Variable(state), Variable(action))
+
+        self.critic.train()  # switch back to training (end of evaluation)
+
+        return q
+
 
     def update_parameters(self, batch):
         # store buffer values in Torch Variables
@@ -187,7 +198,7 @@ class DDPG(object):
         policy_loss.backward()
         self.actor_optim.step()
 
-        ## ...
+        ## UPDATE TAREGT NETWORKS WEIGHTS
         # make target Actor and target Critic converge to same weight as base Actor and Critic
         soft_update(self.actor_target, self.actor, self.tau)
         soft_update(self.critic_target, self.critic, self.tau)

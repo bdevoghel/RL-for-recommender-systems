@@ -4,7 +4,8 @@ import random
 from gym.spaces import Box
 from collections import namedtuple
 
-from ddpg import DDPG
+from utils.ddpg import DDPG
+from utils.td3 import Agent as TD3
 
 
 """
@@ -15,32 +16,52 @@ From: https://github.com/ikostrikov/pytorch-ddpg-naf
 Transition = namedtuple(
     "Transition", ("state", "action", "reward", "next_state", "has_not_left")
 )
-LEARN_ITERATIONS = 1  # number of times the memory is sampled and the parameters are updated per learn() call
+
+class Agent:
+    def select_action(self, state, iter):
+        raise NotImplementedError()
+
+    def remember(self, state, action, reward, next_state, has_not_left):
+        raise NotImplementedError()
+    
+    def learn(self):
+        raise NotImplementedError()
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}()"
 
 
-class DDPGAgent:
+class DDPGAgent(Agent):
     def __init__(
         self,
         observations_space: Box,
         action_space: Box,
         memory_sample_size=128,
+        alpha=0.0001,
+        beta=0.001,
         gamma=0.95,
         tau=0.001,
         hidden_size=128,
+        ounoise_sigma=0.2,
+        ounoise_sigma_min=0.0,
         ounoise_decay_period=None,
     ):
         self.observations_space = observations_space
         self.action_space = action_space
         self.updates = 0  # counter of number of updates to parameters
 
-        self.memory = ReplayBuffer(capacity=1e4)
+        self.memory = ReplayBuffer(capacity=1e6)
         self.memory_sample_size = memory_sample_size
 
+        self.alpha = alpha
+        self.beta = beta
         self.gamma = gamma
         self.tau = tau
         self.hidden_size = hidden_size
 
         self.ddpg = DDPG(
+            alpha=alpha,
+            beta=beta,
             gamma=gamma,
             tau=tau,
             hidden_size=hidden_size,
@@ -49,27 +70,82 @@ class DDPGAgent:
         )
 
         self.ounoise = OUNoise(
-            action_space.shape[0], sigma_decay_period=ounoise_decay_period,
+            action_space.shape[0], 
+            sigma=ounoise_sigma,
+            sigma_min=ounoise_sigma_min,
+            sigma_decay_period=ounoise_decay_period,
         )  # action noise
         self.param_noise = None  # observation noise
 
-    def select_action(self, state):
+    def select_action(self, state, time_step):
         state = torch.Tensor(np.array([state]))
         prediction = self.ddpg.select_action(state, self.ounoise, self.param_noise)
         return prediction.numpy()[0]
 
-    def learn(self):
-        if (
-            len(self.memory) > self.memory_sample_size
-        ):  # if memory is sufficiently populated
-            for _ in range(LEARN_ITERATIONS):
-                batch = self.memory.sample(self.memory_sample_size, batchwise=True)
+    def get_q(self, state, action):
+        state = torch.Tensor(np.array([state]))
+        action = torch.Tensor(np.array([action]))
+        q =  self.ddpg.get_q(state, action)
+        return q.detach().numpy()[0,0]
 
-                value_loss, policy_loss = self.ddpg.update_parameters(batch)
-                self.updates += 1
+    def remember(self, state, action, reward, next_state, has_not_left):
+        self.memory.push(state, action, reward, next_state, has_not_left)
+    
+    def learn(self):
+        if (len(self.memory) > self.memory_sample_size):  # if memory is sufficiently populated
+            batch = self.memory.sample(self.memory_sample_size, batchwise=True)
+
+            value_loss, policy_loss = self.ddpg.update_parameters(batch)
+            self.updates += 1
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(g{self.gamma:.2f}-t{self.tau:.4f}-hs{self.hidden_size:03d})"
+        return f"{self.__class__.__name__}(g{self.gamma}-t{self.tau}-a{self.alpha}-b{self.beta}-hs{self.hidden_size}-sm{self.ounoise.sigma_min})"
+
+
+class TD3Agent(Agent):
+    def __init__(self, 
+        alpha,
+        beta,
+        tau,
+        env,
+        input_dims,
+        gamma=0.99,
+        update_actor_interval=2,
+        warmup=100,
+        n_actions=2,
+        max_size=1000000,
+        layer1_size=400,
+        layer2_size=300,
+        batch_size=100,
+        noise=0.1):
+        self.alpha = alpha
+        self.beta = beta
+        self.tau = tau
+        self.gamma = gamma
+        self.hs1 = layer1_size
+        self.hs2 = layer2_size
+
+        self.td3 = TD3(alpha=alpha, beta=beta, tau=tau, env=env, input_dims=input_dims, gamma=gamma, update_actor_interval=update_actor_interval, warmup=warmup, n_actions=n_actions, max_size=max_size, layer1_size=layer1_size, layer2_size=layer2_size, batch_size=batch_size, noise=noise)
+        self.updates = 0
+
+    def select_action(self, state, time_step):
+        return self.td3.choose_action(state, time_step)
+
+    def get_q(self, state, action):
+        return self.td3.get_q(state, action)
+
+    def remember(self, state, action, reward, next_state, has_not_left):
+        self.td3.remember(state, action, reward, next_state, not has_not_left)
+    
+    def learn(self):
+        self.td3.learn()
+        self.updates += 1
+
+    def load_models(self):
+        self.td3.load_models()
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(g{self.gamma}-t{self.tau}-a{self.alpha}-b{self.beta}-1hs{self.hs1}-2hs{self.hs2})"
 
 
 class ReplayBuffer(object):
@@ -125,7 +201,7 @@ class OUNoise:
         self.action_dimension = action_dimension
         self.scale = scale
         self.mu = mu  # mean to which the process converges
-        self.theta = theta  #
+        self.theta = theta  # weight of past deviation
         self.sigma = sigma  # variance
         self.sigma_min = sigma_min
         self.sigma_decay = sigma_decay
